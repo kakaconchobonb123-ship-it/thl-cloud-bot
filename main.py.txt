@@ -1,0 +1,320 @@
+import discord
+from discord import app_commands
+import asyncio
+import random
+from datetime import datetime, timedelta
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
+database_keys = {}
+
+stock_status = {
+    "VSPHONE": True,
+    "VMOS": True
+}
+
+anti_spam_enabled = False
+user_message_history = {}
+
+async def background_stock_checker():
+    await asyncio.sleep(5)
+    while True:
+        try:
+            stock_status["VSPHONE"] = random.choice([True, True, False])
+            stock_status["VMOS"] = random.choice([True, True, False])
+        except Exception as e:
+            print(f"Lỗi quét kho: {e}")
+        await asyncio.sleep(300)
+
+class AdminTimeSelectView(discord.ui.View):
+    def __init__(self, service_name: str):
+        super().__init__(timeout=None)
+        self.service_name = service_name
+
+    @discord.ui.button(label="⏱️ Cấp 4 Giờ", style=discord.ButtonStyle.blurple)
+    async def time_4h(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.create_machine_with_retry(interaction, 4)
+
+    @discord.ui.button(label="👑 Cấp 24 Giờ", style=discord.ButtonStyle.danger)
+    async def time_24h(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.create_machine_with_retry(interaction, 24)
+
+    async def create_machine_with_retry(self, interaction: discord.Interaction, hours: int):
+        max_attempts = 2
+        success = False
+        msg = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                if attempt == 1:
+                    await interaction.response.edit_message(content=f"⏳ Đang mua và khởi tạo máy **{self.service_name}** ({hours} giờ)...", view=None)
+                    msg = await interaction.original_response()
+                else:
+                    await msg.edit(content=f"⚠️ Lần thử 1 không thành công, hệ thống đang **tự động mua lại lần 2** cho `{self.service_name}`...", embed=None, view=None)
+                    await asyncio.sleep(1)
+
+                if not stock_status.get(self.service_name, True):
+                    raise Exception("Kho máy ảo vừa đột ngột hết hàng!")
+
+                for percent in range(25, 101, 25):
+                    blocks = '█' * (percent // 10)
+                    dots = '░' * (10 - (percent // 10))
+                    embed = discord.Embed(
+                        title=f"🚀 Đang xử lý mua máy (Lần {attempt}/{max_attempts})",
+                        description=f"📦 Đang kết nối thanh toán và mua phone 🔵 `{self.service_name}`...\n\n`[ {blocks}{dots} ] {percent}%`",
+                        color=discord.Color.yellow()
+                    )
+                    await msg.edit(embed=embed, view=None)
+                    await asyncio.sleep(0.4)
+
+                if attempt == 1 and random.random() < 0.2:
+                    raise Exception("Lỗi phản hồi từ web tạm thời!")
+
+                success = True
+                break
+
+            except Exception as err:
+                if attempt == max_attempts:
+                    fail_embed = discord.Embed(
+                        title="❌ Mua Máy Thất Bại",
+                        description=f"Hệ thống đã tự động thử lại nhưng máy ảo **{self.service_name}** đã hết đột ngột hoặc lỗi kết nối.\n\n**Chi tiết:** `{err}`",
+                        color=discord.Color.red()
+                    )
+                    if msg:
+                        await msg.edit(content=None, embed=fail_embed, view=None)
+                    else:
+                        await interaction.followup.send(embed=fail_embed, ephemeral=True)
+                    return
+
+        if success:
+            email = f"thl_cloud_{random.randint(10000, 99999)}@gmail.com"
+            password = "Thl@" + str(random.randint(1000, 9999))
+            invite_code = f"{self.service_name.lower()}ad_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=5))
+
+            expiry_time = datetime.now() + timedelta(hours=hours)
+            database_keys[invite_code] = {
+                "service": self.service_name,
+                "expires_at": expiry_time,
+                "buff_count": 0,
+                "last_buff_date": ""
+            }
+
+            success_embed = discord.Embed(
+                title=f"👑 Mua Máy {hours}h Thành Công",
+                description="Đã mua thành công! Khi đăng nhập vào web, bạn sẽ thấy máy ảo sẵn sàng với số giờ đã chọn:",
+                color=discord.Color.green()
+            )
+            success_embed.add_field(name="📧 Tài khoản (Email):", value=f"`{email}`", inline=False)
+            success_embed.add_field(name="🔑 Mật khẩu:", value=f"`{password}`", inline=False)
+            success_embed.add_field(name="🎟️ Mã mời hệ thống:", value=f"`{invite_code}`", inline=False)
+            success_embed.add_field(name="⏳ Hạn sử dụng:", value=f"Đến **{expiry_time.strftime('%H:%M - %d/%m/%Y')} ({hours}h)**", inline=False)
+            success_embed.set_footer(text="THL CLOUD System • Giao dịch hoàn tất")
+
+            await msg.edit(content=None, embed=success_embed, view=None)
+
+class AdminMachineView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+        if stock_status["VSPHONE"]:
+            vs_btn = discord.ui.Button(label="VSPHONE", style=discord.ButtonStyle.green, emoji="🟢")
+            async def vs_callback(interaction: discord.Interaction):
+                if not interaction.user.guild_permissions.administrator:
+                    await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
+                    return
+                view = AdminTimeSelectView("VSPHONE")
+                await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VSPHONE**. Hãy chọn mức thời gian muốn mua:", view=view)
+            vs_btn.callback = vs_callback
+            self.add_item(vs_btn)
+
+        if stock_status["VMOS"]:
+            vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🔵")
+            async def vmos_callback(interaction: discord.Interaction):
+                if not interaction.user.guild_permissions.administrator:
+                    await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
+                    return
+                view = AdminTimeSelectView("VMOS")
+                await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VMOS**. Hãy chọn mức thời gian muốn mua:", view=view)
+            vmos_btn.callback = vmos_callback
+            self.add_item(vmos_btn)
+
+class MainBot(discord.Client):
+    def __init__(self):
+        super().__init__(intents=intents)
+        self.tree = app_commands.CommandTree(self)
+
+    async def setup_hook(self):
+        self.loop.create_task(background_stock_checker())
+        await self.tree.sync()
+        print("THL CLOUD đã đồng bộ lệnh và sẵn sàng.")
+
+client = MainBot()
+
+@client.event
+async def on_ready():
+    print(f'Bot THL CLOUD đã online: {client.user}')
+
+@client.event
+async def on_message(message):
+    global anti_spam_enabled
+    if message.author.bot or not message.guild:
+        return
+    if not anti_spam_enabled or message.author.guild_permissions.administrator:
+        return
+
+    author_id = message.author.id
+    current_time = datetime.now()
+
+    if author_id not in user_message_history:
+        user_message_history[author_id] = []
+
+    user_message_history[author_id].append(current_time)
+    user_message_history[author_id] = [t for t in user_message_history[author_id] if current_time - t < timedelta(seconds=5)]
+
+    if len(user_message_history[author_id]) >= 5:
+        try:
+            await message.guild.ban(message.author, reason="THL CLOUD Admin Security: Tự động phát hiện spam.")
+            warning_msg = await message.channel.send(f"🚨 **THL CLOUD Security** phát hiện thành viên {message.author.mention} spam và đã tự động **BAN**!")
+            await asyncio.sleep(10)
+            await warning_msg.delete()
+        except Exception as e:
+            print(f"Không thể ban: {e}")
+
+@client.tree.command(name="reg", description="Hệ thống quản lý và cấp phát máy trial của THL CLOUD")
+async def reg(interaction: discord.Interaction):
+    is_admin = interaction.user.guild_permissions.administrator
+
+    if is_admin:
+        view = AdminMachineView()
+        if len(view.children) == 0:
+            await interaction.response.send_message("⚠️ Hiện tại tất cả các loại máy ảo đều đang **hết hàng**. Vui lòng quay lại sau!", ephemeral=True)
+            return
+
+        embed = discord.Embed(
+            title="👑 THL CLOUD — Quản Trị Mua Máy",
+            description=f"🌸 Chào Admin {interaction.user.mention}, hãy chọn loại máy ảo cần mua:",
+            color=discord.Color.gold()
+        )
+        embed.add_field(name="Trạng thái kho:", value=f"🟢 VSPHONE: `{'Còn hàng' if stock_status['VSPHONE'] else 'Hết hàng'}`\n🔵 VMOS: `{'Còn hàng' if stock_status['VMOS'] else 'Hết hàng'}`", inline=False)
+        await interaction.response.send_message(embed=embed, view=view)
+    else:
+        await interaction.response.send_message(f"⏳ Hệ thống đang tự động khởi tạo máy **4 Giờ** cho bạn...", ephemeral=True)
+        msg = await interaction.original_response()
+
+        for percent in range(50, 101, 50):
+            embed = discord.Embed(
+                title="⏳ Đang khởi tạo...",
+                description=f"Hệ thống đang chuẩn bị máy trial 4h...\n`[ {'█' * (percent // 10)}{'░' * (10 - percent // 10)} ] {percent}%`",
+                color=discord.Color.yellow()
+            )
+            await msg.edit(embed=embed)
+            await asyncio.sleep(0.4)
+
+        email = f"thl_user_{random.randint(10000, 99999)}@gmail.com"
+        password = "User@" + str(random.randint(1000, 9999))
+        invite_code = f"user_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=5))
+        expiry_time = datetime.now() + timedelta(hours=4)
+
+        database_keys[invite_code] = {
+            "service": "VSPHONE",
+            "expires_at": expiry_time,
+            "buff_count": 0,
+            "last_buff_date": ""
+        }
+
+        success_embed = discord.Embed(
+            title="☁️ Khởi Tạo Máy 4h Thành Công",
+            description="Thông tin tài khoản máy ảo trial của bạn:",
+            color=discord.Color.green()
+        )
+        success_embed.add_field(name="📧 Tài khoản (Email):", value=f"`{email}`", inline=False)
+        success_embed.add_field(name="🔑 Mật khẩu:", value=f"`{password}`", inline=False)
+        success_embed.add_field(name="🎟️ Mã mời hệ thống:", value=f"`{invite_code}`", inline=False)
+        success_embed.add_field(name="⏳ Hạn sử dụng:", value=f"Đến **{expiry_time.strftime('%H:%M - %d/%m/%Y')} (4h)**", inline=False)
+        success_embed.set_footer(text="Dùng lệnh /buff kèm mã mời để gia hạn thêm thời gian!")
+
+        await msg.edit(content=None, embed=success_embed)
+
+@client.tree.command(name="toggle_spam", description="[Admin] Bật hoặc tắt tính năng tự động phát hiện spam và ban")
+async def toggle_spam(interaction: discord.Interaction):
+    global anti_spam_enabled
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Lệnh này chỉ dành riêng cho Quản trị viên!", ephemeral=True)
+        return
+
+    anti_spam_enabled = not anti_spam_enabled
+    status_text = "🟢 ĐÃ BẬT" if anti_spam_enabled else "🔴 ĐÃ TẮT"
+    await interaction.response.send_message(f"🛡️ Kiểm soát chống spam tự động ban: **{status_text}**", ephemeral=True)
+
+@client.tree.command(name="buff", description="Buff thêm thời gian sử dụng cho mã mời")
+@app_commands.describe(code="Nhập mã mời của bạn vào đây")
+async def buff(interaction: discord.Interaction, code: str):
+    is_admin = interaction.user.guild_permissions.administrator
+
+    if not is_admin:
+        account_created_at = interaction.user.created_at.replace(tzinfo=None)
+        account_age_days = (datetime.now() - account_created_at).days
+        if account_age_days < 3:
+            await interaction.response.send_message(
+                f"❌ **Từ chối!** Tài khoản Discord của bạn mới tạo được **{account_age_days} ngày** (Yêu cầu trên 3 ngày).", 
+                ephemeral=True
+            )
+            return
+
+    code = code.strip()
+    today_str = datetime.now().strftime("%d/%m/%Y")
+
+    await interaction.response.send_message(f"🔄 Đang xác nhận mã mời và thực hiện buff...")
+    msg = await interaction.original_response()
+
+    for percent in range(50, 101, 50):
+        embed = discord.Embed(
+            title="⏳ Đang xử lý...",
+            description=f"Đang dán và kiểm tra mã `{code}` để cộng +4h...\n`[ {'█' * (percent // 10)}{'░' * (10 - percent // 10)} ] {percent}%`",
+            color=discord.Color.yellow()
+        )
+        await msg.edit(embed=embed)
+        await asyncio.sleep(0.4)
+
+    if code not in database_keys:
+        database_keys[code] = {
+            "service": "VSPHONE",
+            "expires_at": datetime.now() + timedelta(hours=4),
+            "buff_count": 0,
+            "last_buff_date": ""
+        }
+
+    data = database_keys[code]
+    max_buff_limit = 5 if is_admin else 1
+
+    if data["last_buff_date"] == today_str and data["buff_count"] >= max_buff_limit:
+        role_name = "Quản trị viên" if is_admin else "Thành viên thường"
+        await msg.edit(content=f"⚠️ Mã mời này đã đạt giới hạn tối đa **{max_buff_limit} lần buff** trong ngày cho {role_name} ({today_str}). Sẽ reset lúc 00:00!", embed=None)
+        return
+
+    if data["last_buff_date"] != today_str:
+        data["buff_count"] = 0
+
+    data["buff_count"] += 1
+    data["last_buff_date"] = today_str
+    
+    if data["expires_at"] < datetime.now():
+        data["expires_at"] = datetime.now()
+    
+    data["expires_at"] += timedelta(hours=4)
+    new_time_str = data["expires_at"].strftime("%H:%M:%S - %d/%m/%Y")
+
+    success_embed = discord.Embed(
+        title="🎁 THL CLOUD — Buff Thời Gian Thành Công!",
+        color=discord.Color.green()
+    )
+    success_embed.add_field(name="🎟️ Mã mời:", value=f"`{code}`", inline=False)
+    success_embed.add_field(name="⏳ Thời gian cộng thêm:", value="**+4 Giờ**", inline=False)
+    success_embed.add_field(name="📅 Hạn mới của máy:", value=f"`{new_time_str}`", inline=False)
+    success_embed.set_footer(text=f"THL CLOUD • Đã dùng {data['buff_count']}/{max_buff_limit} lượt hôm nay (Reset lúc 00:00)")
+
+    await msg.edit(content=None, embed=success_embed)
+
+client.run('YOUR_TOKEN')
