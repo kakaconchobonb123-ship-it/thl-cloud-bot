@@ -317,4 +317,4 @@ async def buff(interaction: discord.Interaction, code: str):
 
     await msg.edit(content=None, embed=success_embed)
 
-client.run('YOUR_TOKEN')
+client.run('MTU1ODg2Njg3NTkzNTQ5NDI1NA.GEsoeN.HSmT4g8lhXfVgku_y-eZmg3L1OSmKOxXggm-Ic')
