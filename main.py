@@ -2,6 +2,7 @@ import discord
 from discord import app_commands
 import asyncio
 import random
+import os
 from datetime import datetime, timedelta
 
 intents = discord.Intents.default()
@@ -15,7 +16,6 @@ stock_status = {
     "VMOS": True
 }
 
-# Modal để Admin nhập tên/ID thành viên trong server khi cấp máy
 class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viên"):
     member_name = discord.ui.TextInput(
         label="Tên hoặc ID thành viên trong server",
@@ -32,7 +32,6 @@ class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viê
     async def on_submit(self, interaction: discord.Interaction):
         target_name = self.member_name.value.strip().lower()
         
-        # Tìm kiếm thành viên trong server (guild)
         matched_member = None
         for member in interaction.guild.members:
             if target_name in member.name.lower() or target_name in member.display_name.lower() or target_name == str(member.id):
@@ -152,7 +151,6 @@ async def reg(interaction: discord.Interaction):
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
     else:
-        # Người dùng thường khi tạo sẽ nhận sẵn máy 4h
         await interaction.response.send_message(f"⏳ Hệ thống đang tự động khởi tạo máy trial **4 Giờ** cho bạn...", ephemeral=True)
         msg = await interaction.original_response()
 
@@ -250,5 +248,4 @@ async def buff(interaction: discord.Interaction, code: str):
 
     await msg.edit(content=None, embed=success_embed)
 
-client.run('MTU1OTE0NTk2MTM4Nzg1MTg1OA.GrsneO.m1uqVqU2qE3X6qw4faExjK_znRTqYPniazc6KU')
-
+client.run(os.environ.get('DISCORD_TOKEN'))
