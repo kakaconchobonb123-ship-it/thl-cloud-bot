@@ -250,5 +250,5 @@ async def buff(interaction: discord.Interaction, code: str):
 
     await msg.edit(content=None, embed=success_embed)
 
-client.run('MTU1OTE0NTk2MTM4Nzg1MTg1OA.GtmP7R.CMU7CD8GfaPzMKehl4MppCR_lbibMS-aDNXlVU')
+client.run('MTU1OTE0NTk2MTM4Nzg1MTg1OA.GrsneO.m1uqVqU2qE3X6qw4faExjK_znRTqYPniazc6KU')
 
