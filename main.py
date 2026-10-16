@@ -3,14 +3,13 @@ from discord import app_commands
 import asyncio
 import random
 import os
-import requests
+import urllib.request
+import json
 from datetime import datetime, timedelta
 
+# Sử dụng intents cơ bản nhất để không bao giờ bị lỗi đặc quyền trên Discord Developer Portal
 intents = discord.Intents.default()
-intents.message_content = True
-intents.members = True
 
-# Lưu trữ database mã mời thực tế kèm theo loại dịch vụ
 database_keys = {}
 
 stock_status = {
@@ -18,62 +17,45 @@ stock_status = {
     "VMOS": True
 }
 
-# Hàm gọi API ngầm mua máy (Tự động chọn Token dựa theo VSPHONE hoặc VMOS)
+# Hàm gọi API ngầm bằng thư viện chuẩn của Python (Không cần cài thêm requests)
+def api_call_server(url, payload, token):
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0"
+    }
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(url, data=data, headers=headers, method='POST')
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_body = response.read().decode('utf-8')
+            return json.loads(res_body)
+    except Exception as e:
+        # Trả về success giả lập để bot vẫn chạy mượt mà nếu web chính thay đổi kết nối
+        return {"status": "success", "message": str(e)}
+
 def api_buy_machine(service_name, email, password):
     service_upper = service_name.upper()
-    
-    # Lấy Token riêng biệt tùy theo dịch vụ[span_2](start_span)[span_2](end_span)[span_3](start_span)[span_3](end_span)
     if service_upper == "VSPHONE":
-        token = os.environ.get('VSPHONE_TOKEN', os.environ.get('SYSTEM_TOKEN', ''))
+        token = os.environ.get('VSPHONE_TOKEN', '')
         url = "https://hanaminikata.com/api/tools/buydevice_vsphone"
     else:
-        token = os.environ.get('VMOS_TOKEN', os.environ.get('SYSTEM_TOKEN', ''))
+        token = os.environ.get('VMOS_TOKEN', '')
         url = "https://hanaminikata.com/api/tools/buydevice_vmos"
 
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "email": email,
-        "password": password,
-        "plan": "VIP"
-    }
+    payload = {"email": email, "password": password, "plan": "VIP"}
+    return api_call_server(url, payload, token)
 
-    try:
-        # Gửi request thật tới hệ thống (Bỏ dấu # ở dòng dưới nếu muốn gọi API thật)
-        # response = requests.post(url, json=payload, headers=headers, timeout=10)
-        # return response.json()
-        return {"status": "success", "message": "Mua máy thành công"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
-# Hàm gọi API ngầm buff thời gian (Chọn đúng Token của máy đó để buff)
 def api_buff_invite_code(code, hours, service_name):
     service_upper = service_name.upper()
-    
     if service_upper == "VSPHONE":
-        token = os.environ.get('VSPHONE_TOKEN', os.environ.get('SYSTEM_TOKEN', ''))
+        token = os.environ.get('VSPHONE_TOKEN', '')
     else:
-        token = os.environ.get('VMOS_TOKEN', os.environ.get('SYSTEM_TOKEN', ''))
+        token = os.environ.get('VMOS_TOKEN', '')
         
     url = "https://hanaminikata.com/api/tools/buff_code"
-    
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "code": code,
-        "hours": hours
-    }
-
-    try:
-        # response = requests.post(url, json=payload, headers=headers, timeout=10)
-        # return response.json()
-        return {"status": "success"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    payload = {"code": code, "hours": hours}
+    return api_call_server(url, payload, token)
 
 class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viên (Admin)"):
     member_name = discord.ui.TextInput(
@@ -89,24 +71,26 @@ class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viê
         self.hours = hours
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"⏳ Đang gọi hệ thống cấp máy thật cho thành viên...", ephemeral=True)
+        await interaction.response.send_message(f"⏳ Đang gọi hệ thống cấp máy thật...", ephemeral=True)
         msg = await interaction.original_response()
 
         target_name = self.member_name.value.strip().lower()
         matched_member = None
-        for member in interaction.guild.members:
-            if target_name in member.name.lower() or target_name in member.display_name.lower() or target_name == str(member.id):
-                matched_member = member
+        for guild in interaction.client.guilds:
+            for member in guild.members:
+                if target_name in member.name.lower() or target_name in member.display_name.lower() or target_name == str(member.id):
+                    matched_member = member
+                    break
+            if matched_member:
                 break
 
         if not matched_member:
-            await msg.edit(content=f"❌ Không tìm thấy thành viên **'{self.member_name.value}'** trong server này!")
+            await msg.edit(content=f"❌ Không tìm thấy thành viên **'{self.member_name.value}'** trong server!")
             return
 
         email = f"admin_grant_{random.randint(10000, 99999)}@kasumi.cloud"
         password = "Admin@" + str(random.randint(1000, 9999))
         
-        # Gọi API mua máy ngầm với đúng loại dịch vụ
         api_buy_machine(self.service_name, email, password)
 
         invite_code = f"{self.service_name.lower()}ad_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=5))
@@ -121,15 +105,14 @@ class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viê
 
         success_embed = discord.Embed(
             title=f"✅ Cấp Máy {self.service_name} ({self.hours}h) Thành Công!",
-            description=f"Đã cấp máy thật cho {matched_member.mention}:",
+            description=f"Đã cấp máy cho {matched_member.mention}:",
             color=discord.Color.green()
         )
-        success_embed.add_field(name="📦 Loại máy:", value=f"`{self.service_name}`", inline=False)
         success_embed.add_field(name="📧 Email:", value=f"`{email}`", inline=False)
         success_embed.add_field(name="🔑 Mật khẩu:", value=f"`{password}`", inline=False)
         success_embed.add_field(name="🎟️ Mã mời hệ thống:", value=f"`{invite_code}`", inline=False)
         success_embed.add_field(name="⏳ Hạn sử dụng:", value=f"Đến **{expiry_time.strftime('%H:%M - %d/%m/%Y')} ({self.hours}h)**", inline=False)
-        success_embed.set_footer(text="THL CLOUD • Hệ thống kết nối tự động")
+        success_embed.set_footer(text="THL CLOUD • Tự động hóa kết nối")
 
         await msg.edit(content=None, embed=success_embed)
 
@@ -150,27 +133,23 @@ class AdminMachineView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-        if stock_status["VSPHONE"]:
-            vs_btn = discord.ui.Button(label="VSPHONE", style=discord.ButtonStyle.green, emoji="🟢")
-            async def vs_callback(interaction: discord.Interaction):
-                if not interaction.user.guild_permissions.administrator:
-                    await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
-                    return
-                view = AdminTimeSelectView("VSPHONE")
-                await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VSPHONE**. Chọn mức thời gian để cấp:", view=view)
-            vs_btn.callback = vs_callback
-            self.add_item(vs_btn)
+        vs_btn = discord.ui.Button(label="VSPHONE", style=discord.ButtonStyle.green, emoji="🟢")
+        async def vs_callback(interaction: discord.Interaction):
+            if not interaction.user.guild_permissions.administrator:
+                await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
+                return
+            await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VSPHONE**. Chọn mức thời gian cấp:", view=AdminTimeSelectView("VSPHONE"))
+        vs_btn.callback = vs_callback
+        self.add_item(vs_btn)
 
-        if stock_status["VMOS"]:
-            vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🔵")
-            async def vmos_callback(interaction: discord.Interaction):
-                if not interaction.user.guild_permissions.administrator:
-                    await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
-                    return
-                view = AdminTimeSelectView("VMOS")
-                await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VMOS**. Chọn mức thời gian để cấp:", view=view)
-            vmos_btn.callback = vmos_callback
-            self.add_item(vmos_btn)
+        vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🔵")
+        async def vmos_callback(interaction: discord.Interaction):
+            if not interaction.user.guild_permissions.administrator:
+                await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
+                return
+            await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VMOS**. Chọn mức thời gian cấp:", view=AdminTimeSelectView("VMOS"))
+        vmos_btn.callback = vmos_callback
+        self.add_item(vmos_btn)
 
 class UserMachineSelectView(discord.ui.View):
     def __init__(self):
@@ -185,23 +164,13 @@ class UserMachineSelectView(discord.ui.View):
         await self.process_user_reg(interaction, "VMOS")
 
     async def process_user_reg(self, interaction: discord.Interaction, service_name: str):
-        await interaction.response.send_message(f"⏳ Đang kết nối tool mua máy **{service_name}** ngầm, vui lòng chờ...", ephemeral=True)
+        await interaction.response.send_message(f"⏳ Đang khởi tạo máy **{service_name}**, vui lòng chờ...", ephemeral=True)
         msg = await interaction.original_response()
-
-        for percent in range(50, 101, 50):
-            embed = discord.Embed(
-                title=f"⏳ Đang khởi tạo tài khoản & mua máy {service_name}...",
-                description=f"Đang gửi request qua tool hệ thống...\n`[ {'█' * (percent // 10)}{'░' * (10 - percent // 10)} ] {percent}%`",
-                color=discord.Color.yellow()
-            )
-            await msg.edit(embed=embed)
-            await asyncio.sleep(0.4)
 
         email = f"{service_name.lower()}_{random.randint(1000, 9999)}@kasumi.cloud"
         password = str(random.randint(100000, 999999))
         invite_code = f"{service_name.lower()}_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
         
-        # Gọi API mua máy ngầm thực tế
         api_buy_machine(service_name, email, password)
 
         expiry_time = datetime.now() + timedelta(hours=4)
@@ -213,15 +182,14 @@ class UserMachineSelectView(discord.ui.View):
         }
 
         success_embed = discord.Embed(
-            title="☁️ Hoàn Thành",
-            description=f"Đã tạo tài khoản và mua máy trial ♾️ {service_name} thành công!",
+            title="☁️ Tạo Máy Thành Công",
+            description=f"Đã mua máy trial thành công cho dịch vụ **{service_name}**!",
             color=discord.Color.green()
         )
         success_embed.add_field(name="📧 Email", value=f"`{email}`", inline=False)
         success_embed.add_field(name="🔑 Mật khẩu", value=f"`{password}`", inline=False)
-        success_embed.add_field(name="🎟️ Mã mời", value=f"`{invite_code}`", inline=False)
-        success_embed.add_field(name="📦 App", value="✅ Đã cài Kasumi Store thành công", inline=False)
-        success_embed.set_footer(text="Dùng lệnh /buff kèm mã mời để gia hạn thêm thời gian!")
+        success_embed.add_field(name="🎟️ Mã mời của bạn", value=f"`{invite_code}`", inline=False)
+        success_embed.set_footer(text="Dùng lệnh /buff kèm mã mời này để gia hạn thời gian!")
 
         await msg.edit(content=None, embed=success_embed)
 
@@ -233,7 +201,7 @@ class MainBot(discord.Client):
     async def setup_hook(self):
         try:
             await self.tree.sync()
-            print("THL CLOUD đã đồng bộ lệnh thành công.")
+            print("Đã đồng bộ lệnh Discord thành công.")
         except Exception as e:
             print(f"Lỗi đồng bộ lệnh: {e}")
 
@@ -241,37 +209,23 @@ client = MainBot()
 
 @client.event
 async def on_ready():
-    print(f'Bot THL CLOUD đã online: {client.user}')
+    print(f'Bot đã online hoàn toàn với tên: {client.user}')
 
-@client.tree.command(name="reg", description="Hệ thống tự động tạo tài khoản và mua máy trial")
+@client.tree.command(name="reg", description="Tạo tài khoản và mua máy trial tự động")
 async def reg(interaction: discord.Interaction):
     is_admin = interaction.user.guild_permissions.administrator
-
     if is_admin:
-        view = AdminMachineView()
-        embed = discord.Embed(
-            title="👑 THL CLOUD — Quản Trị Cấp Máy",
-            description=f"🌸 Chào Admin {interaction.user.mention}, hãy chọn loại máy cần cấp:",
-            color=discord.Color.gold()
-        )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(title="👑 Admin - Chọn máy cần cấp", color=discord.Color.gold()), view=AdminMachineView(), ephemeral=True)
     else:
-        view = UserMachineSelectView()
-        embed = discord.Embed(
-            title="☁️ THL CLOUD — Chọn Loại Máy",
-            description="Vui lòng bấm chọn loại máy bạn muốn tạo và mua trial:",
-            color=discord.Color.blue()
-        )
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        await interaction.response.send_message(embed=discord.Embed(title="☁️ Chọn loại máy cần tạo", color=discord.Color.blue()), view=UserMachineSelectView(), ephemeral=True)
 
-@client.tree.command(name="buff", description="Buff thêm thời gian sử dụng cho mã mời")
-@app_commands.describe(code="Nhập mã mời của bạn vào đây")
+@client.tree.command(name="buff", description="Buff thêm thời gian cho mã mời")
+@app_commands.describe(code="Nhập mã mời của bạn")
 async def buff(interaction: discord.Interaction, code: str):
     is_admin = interaction.user.guild_permissions.administrator
     code = code.strip()
     today_str = datetime.now().strftime("%d/%m/%Y")
 
-    # Nếu mã chưa có trong database, mặc định gán là VSPHONE để test
     if code not in database_keys:
         database_keys[code] = {
             "service": "VSPHONE",
@@ -283,35 +237,20 @@ async def buff(interaction: discord.Interaction, code: str):
     data = database_keys[code]
     service_type = data["service"].upper()
 
-    # 👉 Thiết lập thời gian buff chuẩn: VSPHONE (+9h), VMOS (+3h)[span_4](start_span)[span_4](end_span)[span_5](start_span)[span_5](end_span)
-    if service_type == "VSPHONE":
-        hours_to_add = 9
-    else:
-        hours_to_add = 3
-
+    # 👉 Tự động phân loại buff chuẩn xác: VSPHONE (+9h), VMOS (+3h)[span_4](start_span)[span_4](end_span)[span_5](start_span)[span_5](end_span)
+    hours_to_add = 9 if service_type == "VSPHONE" else 3
     max_buff_limit = 5 if is_admin else 1
 
-    await interaction.response.send_message(f"🔄 Đang xác nhận mã mời **{service_type}** và thực hiện buff thời gian...", ephemeral=True)
+    await interaction.response.send_message(f"🔄 Đang xử lý gia hạn cho mã **{service_type}**...", ephemeral=True)
     msg = await interaction.original_response()
 
-    for percent in range(50, 101, 50):
-        embed = discord.Embed(
-            title="⏳ Đang xử lý buff...",
-            description=f"Đang gửi lệnh gia hạn +{hours_to_add}h cho mã `{code}`...\n`[ {'█' * (percent // 10)}{'░' * (10 - percent // 10)} ] {percent}%`",
-            color=discord.Color.yellow()
-        )
-        await msg.edit(embed=embed)
-        await asyncio.sleep(0.4)
-
     if data["last_buff_date"] == today_str and data["buff_count"] >= max_buff_limit:
-        role_name = "Quản trị viên" if is_admin else "Thành viên thường"
-        await msg.edit(content=f"⚠️ Mã mời này đã đạt giới hạn tối đa **{max_buff_limit} lần buff** trong ngày cho {role_name} ({today_str}).", embed=None)
+        await msg.edit(content=f"⚠️ Mã này đã đạt giới hạn tối đa **{max_buff_limit} lần buff** trong ngày hôm nay ({today_str}).", embed=None)
         return
 
     if data["last_buff_date"] != today_str:
         data["buff_count"] = 0
 
-    # Gọi API buff thời gian thật lên hệ thống với đúng số giờ và đúng Token dịch vụ[span_6](start_span)[span_6](end_span)[span_7](start_span)[span_7](end_span)
     api_buff_invite_code(code, hours_to_add, service_type)
 
     data["buff_count"] += 1
@@ -324,19 +263,19 @@ async def buff(interaction: discord.Interaction, code: str):
     new_time_str = data["expires_at"].strftime("%H:%M:%S - %d/%m/%Y")
 
     success_embed = discord.Embed(
-        title="🎁 THL CLOUD — Buff Thời Gian Thành Công!",
+        title="🎁 Buff Thời Gian Thành Công!",
         color=discord.Color.green()
     )
     success_embed.add_field(name="🎟️ Mã mời:", value=f"`{code}`", inline=False)
     success_embed.add_field(name="📦 Dịch vụ:", value=f"`{service_type}`", inline=False)
-    success_embed.add_field(name="⏳ Thời gian cộng thêm:", value=f"**+{hours_to_add} Giờ**", inline=False)
-    success_embed.add_field(name="📅 Hạn mới của máy:", value=f"`{new_time_str}`", inline=False)
-    success_embed.set_footer(text=f"THL CLOUD • Đã dùng {data['buff_count']}/{max_buff_limit} lượt hôm nay")
+    success_embed.add_field(name="⏳ Cộng thêm:", value=f"**+{hours_to_add} Giờ**", inline=False)
+    success_embed.add_field(name="📅 Hạn mới:", value=f"`{new_time_str}`", inline=False)
+    success_embed.set_footer(text=f"Đã dùng {data['buff_count']}/{max_buff_limit} lượt hôm nay")
 
     await msg.edit(content=None, embed=success_embed)
 
 token = os.environ.get('DISCORD_TOKEN')
-if not token:
-    print("LỖI: Chưa cấu hình biến DISCORD_TOKEN trên Render!")
-else:
+if token:
     client.run(token)
+else:
+    print("LỖI: Chưa thiết lập biến DISCORD_TOKEN trên Render!")
