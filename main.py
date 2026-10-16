@@ -7,17 +7,11 @@ import urllib.request
 import json
 from datetime import datetime, timedelta
 
-# Sử dụng intents cơ bản nhất để không bao giờ bị lỗi đặc quyền trên Discord Developer Portal
 intents = discord.Intents.default()
 
+# Lưu trữ cơ sở dữ liệu mã mời gắn liền với email, mật khẩu và thời hạn thực tế
 database_keys = {}
 
-stock_status = {
-    "VSPHONE": True,
-    "VMOS": True
-}
-
-# Hàm gọi API ngầm bằng thư viện chuẩn của Python (Không cần cài thêm requests)
 def api_call_server(url, payload, token):
     headers = {
         "Authorization": f"Bearer {token}",
@@ -31,7 +25,6 @@ def api_call_server(url, payload, token):
             res_body = response.read().decode('utf-8')
             return json.loads(res_body)
     except Exception as e:
-        # Trả về success giả lập để bot vẫn chạy mượt mà nếu web chính thay đổi kết nối
         return {"status": "success", "message": str(e)}
 
 def api_buy_machine(service_name, email, password):
@@ -98,6 +91,8 @@ class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viê
 
         database_keys[invite_code] = {
             "service": self.service_name,
+            "email": email,
+            "password": password,
             "expires_at": expiry_time,
             "buff_count": 0,
             "last_buff_date": ""
@@ -135,7 +130,7 @@ class AdminMachineView(discord.ui.View):
 
         vs_btn = discord.ui.Button(label="VSPHONE", style=discord.ButtonStyle.green, emoji="🟢")
         async def vs_callback(interaction: discord.Interaction):
-            if not interaction.user.guild_permissions.administrator:
+            if not interaction.guild or not interaction.user.guild_permissions.administrator:
                 await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
                 return
             await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VSPHONE**. Chọn mức thời gian cấp:", view=AdminTimeSelectView("VSPHONE"))
@@ -144,7 +139,7 @@ class AdminMachineView(discord.ui.View):
 
         vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🔵")
         async def vmos_callback(interaction: discord.Interaction):
-            if not interaction.user.guild_permissions.administrator:
+            if not interaction.guild or not interaction.user.guild_permissions.administrator:
                 await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
                 return
             await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VMOS**. Chọn mức thời gian cấp:", view=AdminTimeSelectView("VMOS"))
@@ -164,7 +159,7 @@ class UserMachineSelectView(discord.ui.View):
         await self.process_user_reg(interaction, "VMOS")
 
     async def process_user_reg(self, interaction: discord.Interaction, service_name: str):
-        await interaction.response.send_message(f"⏳ Đang khởi tạo máy **{service_name}**, vui lòng chờ...", ephemeral=True)
+        await interaction.response.send_message(f"⏳ Đang khởi tạo và mua máy **{service_name}** trên hệ thống...", ephemeral=True)
         msg = await interaction.original_response()
 
         email = f"{service_name.lower()}_{random.randint(1000, 9999)}@kasumi.cloud"
@@ -176,19 +171,21 @@ class UserMachineSelectView(discord.ui.View):
         expiry_time = datetime.now() + timedelta(hours=4)
         database_keys[invite_code] = {
             "service": service_name,
+            "email": email,
+            "password": password,
             "expires_at": expiry_time,
             "buff_count": 0,
             "last_buff_date": ""
         }
 
         success_embed = discord.Embed(
-            title="☁️ Tạo Máy Thành Công",
-            description=f"Đã mua máy trial thành công cho dịch vụ **{service_name}**!",
+            title="☁️ Tạo Tài Khoản & Mua Máy Thành Công",
+            description=f"Đã đăng ký tài khoản trial cho dịch vụ **{service_name}**:",
             color=discord.Color.green()
         )
-        success_embed.add_field(name="📧 Email", value=f"`{email}`", inline=False)
+        success_embed.add_field(name="📧 Email đăng nhập", value=f"`{email}`", inline=False)
         success_embed.add_field(name="🔑 Mật khẩu", value=f"`{password}`", inline=False)
-        success_embed.add_field(name="🎟️ Mã mời của bạn", value=f"`{invite_code}`", inline=False)
+        success_embed.add_field(name="🎟️ Mã mời hệ thống", value=f"`{invite_code}`", inline=False)
         success_embed.set_footer(text="Dùng lệnh /buff kèm mã mời này để gia hạn thời gian!")
 
         await msg.edit(content=None, embed=success_embed)
@@ -213,7 +210,13 @@ async def on_ready():
 
 @client.tree.command(name="reg", description="Tạo tài khoản và mua máy trial tự động")
 async def reg(interaction: discord.Interaction):
-    is_admin = interaction.user.guild_permissions.administrator
+    is_admin = False
+    if interaction.guild and interaction.user:
+        try:
+            is_admin = interaction.user.guild_permissions.administrator
+        except:
+            is_admin = False
+
     if is_admin:
         await interaction.response.send_message(embed=discord.Embed(title="👑 Admin - Chọn máy cần cấp", color=discord.Color.gold()), view=AdminMachineView(), ephemeral=True)
     else:
@@ -222,26 +225,34 @@ async def reg(interaction: discord.Interaction):
 @client.tree.command(name="buff", description="Buff thêm thời gian cho mã mời")
 @app_commands.describe(code="Nhập mã mời của bạn")
 async def buff(interaction: discord.Interaction, code: str):
-    is_admin = interaction.user.guild_permissions.administrator
+    is_admin = False
+    if interaction.guild and interaction.user:
+        try:
+            is_admin = interaction.user.guild_permissions.administrator
+        except:
+            is_admin = False
+
     code = code.strip()
     today_str = datetime.now().strftime("%d/%m/%Y")
 
     if code not in database_keys:
-        database_keys[code] = {
-            "service": "VSPHONE",
-            "expires_at": datetime.now() + timedelta(hours=4),
-            "buff_count": 0,
-            "last_buff_date": ""
-        }
+        await interaction.response.send_message(f"❌ Mã mời `{code}` không tồn tại trong hệ thống!", ephemeral=True)
+        return
 
     data = database_keys[code]
-    service_type = data["service"].upper()
+    
+    # Kiểm tra xem máy đã hết hạn chưa
+    if datetime.now() > data["expires_at"]:
+        await interaction.response.send_message(f"⚠️ Máy liên kết với mã mời `{code}` (Email: `{data['email']}`) đã **hết hạn sử dụng**, không thể buff thêm thời gian!", ephemeral=True)
+        return
 
-    # 👉 Tự động phân loại buff chuẩn xác: VSPHONE (+9h), VMOS (+3h)[span_4](start_span)[span_4](end_span)[span_5](start_span)[span_5](end_span)
+    service_type = data["service"].upper()
+    
+    # Tự động phân chia thời gian buff chuẩn: VSPHONE (+9h), VMOS (+3h)[span_2](start_span)[span_2](end_span)[span_3](start_span)[span_3](end_span)
     hours_to_add = 9 if service_type == "VSPHONE" else 3
     max_buff_limit = 5 if is_admin else 1
 
-    await interaction.response.send_message(f"🔄 Đang xử lý gia hạn cho mã **{service_type}**...", ephemeral=True)
+    await interaction.response.send_message(f"🔄 Đang xác thực mã mời của email `{data['email']}` và tiến hành buff...", ephemeral=True)
     msg = await interaction.original_response()
 
     if data["last_buff_date"] == today_str and data["buff_count"] >= max_buff_limit:
@@ -256,9 +267,6 @@ async def buff(interaction: discord.Interaction, code: str):
     data["buff_count"] += 1
     data["last_buff_date"] = today_str
     
-    if data["expires_at"] < datetime.now():
-        data["expires_at"] = datetime.now()
-    
     data["expires_at"] += timedelta(hours=hours_to_add)
     new_time_str = data["expires_at"].strftime("%H:%M:%S - %d/%m/%Y")
 
@@ -267,9 +275,10 @@ async def buff(interaction: discord.Interaction, code: str):
         color=discord.Color.green()
     )
     success_embed.add_field(name="🎟️ Mã mời:", value=f"`{code}`", inline=False)
+    success_embed.add_field(name="📧 Email liên kết:", value=f"`{data['email']}`", inline=False)
     success_embed.add_field(name="📦 Dịch vụ:", value=f"`{service_type}`", inline=False)
     success_embed.add_field(name="⏳ Cộng thêm:", value=f"**+{hours_to_add} Giờ**", inline=False)
-    success_embed.add_field(name="📅 Hạn mới:", value=f"`{new_time_str}`", inline=False)
+    success_embed.add_field(name="📅 Hạn mới của máy:", value=f"`{new_time_str}`", inline=False)
     success_embed.set_footer(text=f"Đã dùng {data['buff_count']}/{max_buff_limit} lượt hôm nay")
 
     await msg.edit(content=None, embed=success_embed)
