@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 
 intents = discord.Intents.default()
 
-# Lưu trữ cơ sở dữ liệu mã mời gắn liền với email, mật khẩu và thời hạn thực tế
 database_keys = {}
 
 def api_call_server(url, payload, token):
@@ -81,7 +80,7 @@ class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viê
             await msg.edit(content=f"❌ Không tìm thấy thành viên **'{self.member_name.value}'** trong server!")
             return
 
-        email = f"admin_grant_{random.randint(10000, 99999)}@kasumi.cloud"
+        email = f"admin_grant_{random.randint(10000, 99999)}@THLHUB.com"
         password = "Admin@" + str(random.randint(1000, 9999))
         
         api_buy_machine(self.service_name, email, password)
@@ -128,16 +127,16 @@ class AdminMachineView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-        vs_btn = discord.ui.Button(label="VSPHONE", style=discord.ButtonStyle.green, emoji="🟢")
+        vs_btn = discord.ui.Button(label="VSPhone", style=discord.ButtonStyle.green, emoji="🪩")
         async def vs_callback(interaction: discord.Interaction):
             if not interaction.guild or not interaction.user.guild_permissions.administrator:
                 await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
                 return
-            await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VSPHONE**. Chọn mức thời gian cấp:", view=AdminTimeSelectView("VSPHONE"))
+            await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VSPhone**. Chọn mức thời gian cấp:", view=AdminTimeSelectView("VSPHONE"))
         vs_btn.callback = vs_callback
         self.add_item(vs_btn)
 
-        vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🔵")
+        vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🌀")
         async def vmos_callback(interaction: discord.Interaction):
             if not interaction.guild or not interaction.user.guild_permissions.administrator:
                 await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
@@ -150,19 +149,24 @@ class UserMachineSelectView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="VSPHONE", style=discord.ButtonStyle.green, emoji="🟢")
-    async def vsp_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_user_reg(interaction, "VSPHONE")
+        vs_btn = discord.ui.Button(label="VSPhone", style=discord.ButtonStyle.green, emoji="🪩")
+        async def vs_callback(interaction: discord.Interaction):
+            await self.process_user_reg(interaction, "VSPHONE")
+        vs_btn.callback = vs_callback
+        self.add_item(vs_btn)
 
-    @discord.ui.button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🔵")
-    async def vmos_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self.process_user_reg(interaction, "VMOS")
+        vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🌀")
+        async def vmos_callback(interaction: discord.Interaction):
+            await self.process_user_reg(interaction, "VMOS")
+        vmos_btn.callback = vmos_callback
+        self.add_item(vmos_btn)
 
     async def process_user_reg(self, interaction: discord.Interaction, service_name: str):
         await interaction.response.send_message(f"⏳ Đang khởi tạo và mua máy **{service_name}** trên hệ thống...", ephemeral=True)
         msg = await interaction.original_response()
 
-        email = f"{service_name.lower()}_{random.randint(1000, 9999)}@kasumi.cloud"
+        # Tự sinh email dạng THLHUB.com theo yêu cầu
+        email = f"{service_name.lower()}_{random.randint(1000, 9999)}@THLHUB.com"
         password = str(random.randint(100000, 999999))
         invite_code = f"{service_name.lower()}_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
         
@@ -217,10 +221,22 @@ async def reg(interaction: discord.Interaction):
         except:
             is_admin = False
 
+    panel_embed = discord.Embed(
+        title="🍮 Reg Panel",
+        description=(
+            "Chọn dịch vụ bên dưới để tạo tài khoản nhanh gọn.\n\n"
+            "**Dịch vụ hỗ trợ**\n"
+            "• 🪩 VSPhone\n"
+            "• 🌀 VMOS\n\n"
+            "*Panel chỉ dùng được bởi người đã mở lệnh*"
+        ),
+        color=discord.Color.blurple()
+    )
+
     if is_admin:
-        await interaction.response.send_message(embed=discord.Embed(title="👑 Admin - Chọn máy cần cấp", color=discord.Color.gold()), view=AdminMachineView(), ephemeral=True)
+        await interaction.response.send_message(embed=panel_embed, view=AdminMachineView(), ephemeral=True)
     else:
-        await interaction.response.send_message(embed=discord.Embed(title="☁️ Chọn loại máy cần tạo", color=discord.Color.blue()), view=UserMachineSelectView(), ephemeral=True)
+        await interaction.response.send_message(embed=panel_embed, view=UserMachineSelectView(), ephemeral=True)
 
 @client.tree.command(name="buff", description="Buff thêm thời gian cho mã mời")
 @app_commands.describe(code="Nhập mã mời của bạn")
@@ -241,14 +257,12 @@ async def buff(interaction: discord.Interaction, code: str):
 
     data = database_keys[code]
     
-    # Kiểm tra xem máy đã hết hạn chưa
+    # Kiểm tra hạn sử dụng trước khi buff
     if datetime.now() > data["expires_at"]:
         await interaction.response.send_message(f"⚠️ Máy liên kết với mã mời `{code}` (Email: `{data['email']}`) đã **hết hạn sử dụng**, không thể buff thêm thời gian!", ephemeral=True)
         return
 
     service_type = data["service"].upper()
-    
-    # Tự động phân chia thời gian buff chuẩn: VSPHONE (+9h), VMOS (+3h)[span_2](start_span)[span_2](end_span)[span_3](start_span)[span_3](end_span)
     hours_to_add = 9 if service_type == "VSPHONE" else 3
     max_buff_limit = 5 if is_admin else 1
 
