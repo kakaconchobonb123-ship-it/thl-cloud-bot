@@ -25,8 +25,15 @@ def api_call_server(url, payload):
         with urllib.request.urlopen(req, timeout=10) as response:
             res_body = response.read().decode('utf-8')
             return json.loads(res_body)
+    except urllib.error.HTTPError as e:
+        # Bắt lỗi HTTP trả về từ server (ví dụ 400, 401, 500) để đọc thông báo lỗi cụ thể
+        try:
+            error_body = e.read().decode('utf-8')
+            return json.loads(error_body)
+        except:
+            return {"status": "error", "message": f"Lỗi HTTP: {e.code}"}
     except Exception as e:
-        return {"status": "success", "message": str(e)}
+        return {"status": "error", "message": str(e)}
 
 def api_buy_machine(service_name, email, password):
     service_upper = service_name.upper()
@@ -90,12 +97,31 @@ class UserAccountInputModal(discord.ui.Modal):
         email = parts[0].strip()
         password = parts[1].strip()
 
-        await interaction.response.send_message(f"⏳ Bot đang dùng phiên đăng nhập web để tiến hành mua máy **{self.service_name}**...", ephemeral=True)
+        await interaction.response.send_message(f"⏳ Bot đang gửi yêu cầu mua máy **{self.service_name}** lên hệ thống Hanami...", ephemeral=True)
         msg = await interaction.original_response()
 
-        # Gọi API mua máy thông qua phiên đăng nhập web hanami
-        api_buy_machine(self.service_name, email, password)
+        # Gọi API và nhận kết quả phản hồi thực tế từ server
+        api_response = api_buy_machine(self.service_name, email, password)
+        
+        # Kiểm tra trạng thái phản hồi từ web (phân biệt thành công hay lỗi thực tế)
+        # Thông thường API trả về dạng {"status": "success"} hoặc chứa message báo lỗi/đã nhận
+        status = str(api_response.get("status", "")).lower()
+        message = str(api_response.get("message", "Không có thông báo từ server"))
 
+        # Kiểm tra nếu web báo lỗi hoặc không thành công
+        if status != "success" and "thành công" not in message.lower() and "đã nhận" not in message.lower():
+            # Nếu server trả về lỗi hoặc tài khoản đã được nhận trước đó
+            error_embed = discord.Embed(
+                title="❌ Mua Máy Thất Bại",
+                description=f"Hệ thống Hanami/VSPhone đã từ chối yêu cầu:",
+                color=discord.Color.red()
+            )
+            error_embed.add_field(name="📧 Tài khoản", value=f"`{email}`", inline=False)
+            error_embed.add_field(name="💬 Phản hồi từ web", value=f"```{message}```", inline=False)
+            await msg.edit(content=None, embed=error_embed)
+            return
+
+        # Nếu thành công thật sự, tiến hành tạo mã và lưu dữ liệu
         invite_code = f"{self.service_name.lower()}_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
         expiry_time = datetime.now() + timedelta(hours=4)
 
@@ -110,7 +136,7 @@ class UserAccountInputModal(discord.ui.Modal):
 
         success_embed = discord.Embed(
             title="☁️ Mua Máy Thành Công Qua Web Hanami",
-            description=f"Đã liên kết tài khoản vào dịch vụ **{self.service_name}**:",
+            description=f"Đã xác thực thành công từ trang web cho dịch vụ **{self.service_name}**:",
             color=discord.Color.green()
         )
         success_embed.add_field(name="📧 Email đăng nhập", value=f"`{email}`", inline=False)
