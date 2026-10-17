@@ -11,7 +11,9 @@ intents = discord.Intents.default()
 
 database_keys = {}
 
-def api_call_server(url, payload, token):
+def api_call_server(url, payload):
+    # Sử dụng WEB_SESSION_TOKEN chung để xác thực đăng nhập mua máy trên web hanami
+    token = os.environ.get('WEB_SESSION_TOKEN', '')
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -29,64 +31,73 @@ def api_call_server(url, payload, token):
 def api_buy_machine(service_name, email, password):
     service_upper = service_name.upper()
     if service_upper == "VSPHONE":
-        token = os.environ.get('VSPHONE_TOKEN', '')
         url = "https://hanaminikata.com/api/tools/buydevice_vsphone"
     else:
-        token = os.environ.get('VMOS_TOKEN', '')
         url = "https://hanaminikata.com/api/tools/buydevice_vmos"
 
     payload = {"email": email, "password": password, "plan": "VIP"}
-    return api_call_server(url, payload, token)
+    return api_call_server(url, payload)
 
 def api_buff_invite_code(code, hours, service_name):
-    service_upper = service_name.upper()
-    if service_upper == "VSPHONE":
-        token = os.environ.get('VSPHONE_TOKEN', '')
-    else:
-        token = os.environ.get('VMOS_TOKEN', '')
-        
     url = "https://hanaminikata.com/api/tools/buff_code"
     payload = {"code": code, "hours": hours}
-    return api_call_server(url, payload, token)
+    return api_call_server(url, payload)
 
-class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viên (Admin)"):
-    member_name = discord.ui.TextInput(
-        label="Tên hoặc ID thành viên trong server",
-        placeholder="Nhập tên hiển thị hoặc ID của user...",
+# Vòng lặp ngầm 5 phút vào web hanami giữ phiên đăng nhập không bị văng
+async def keep_session_alive():
+    await asyncio.sleep(10)
+    while True:
+        session_token = os.environ.get('WEB_SESSION_TOKEN', '')
+        if session_token:
+            url = "https://hanaminikata.com/api/tools/ping"
+            headers = {
+                "Authorization": f"Bearer {session_token}",
+                "User-Agent": "Mozilla/5.0"
+            }
+            try:
+                req = urllib.request.Request(url, headers=headers, method='GET')
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    print("[KEEP-ALIVE] Đã duy trì kết nối thành công với hanaminikata.com")
+            except Exception:
+                pass
+        await asyncio.sleep(300) # 5 phút gọi 1 lần
+
+class UserAccountInputModal(discord.ui.Modal):
+    def __init__(self, service_name: str):
+        super().__init__(title=f"Nhập Tài Khoản Mua {service_name}")
+        self.service_name = service_name
+
+    account_info = discord.ui.TextInput(
+        label="Email và Mật khẩu",
+        placeholder="Nhập dạng: email@gmail.com|matkhau",
+        style=discord.TextStyle.short,
         required=True,
-        max_length=100
+        max_length=200
     )
 
-    def __init__(self, service_name: str, hours: int):
-        super().__init__()
-        self.service_name = service_name
-        self.hours = hours
-
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"⏳ Đang gọi hệ thống cấp máy thật...", ephemeral=True)
-        msg = await interaction.original_response()
+        raw_text = self.account_info.value.strip()
+        
+        if "|" in raw_text:
+            parts = raw_text.split("|", 1)
+        else:
+            parts = raw_text.split(maxsplit=1)
 
-        target_name = self.member_name.value.strip().lower()
-        matched_member = None
-        for guild in interaction.client.guilds:
-            for member in guild.members:
-                if target_name in member.name.lower() or target_name in member.display_name.lower() or target_name == str(member.id):
-                    matched_member = member
-                    break
-            if matched_member:
-                break
-
-        if not matched_member:
-            await msg.edit(content=f"❌ Không tìm thấy thành viên **'{self.member_name.value}'** trong server!")
+        if len(parts) < 2:
+            await interaction.response.send_message("❌ Định dạng không đúng! Vui lòng nhập theo kiểu: `email|matkhau`", ephemeral=True)
             return
 
-        email = f"admin_grant_{random.randint(10000, 99999)}@THLHUB.com"
-        password = "Admin@" + str(random.randint(1000, 9999))
-        
+        email = parts[0].strip()
+        password = parts[1].strip()
+
+        await interaction.response.send_message(f"⏳ Bot đang dùng phiên đăng nhập web để tiến hành mua máy **{self.service_name}**...", ephemeral=True)
+        msg = await interaction.original_response()
+
+        # Gọi API mua máy thông qua phiên đăng nhập web hanami
         api_buy_machine(self.service_name, email, password)
 
-        invite_code = f"{self.service_name.lower()}ad_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=5))
-        expiry_time = datetime.now() + timedelta(hours=self.hours)
+        invite_code = f"{self.service_name.lower()}_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
+        expiry_time = datetime.now() + timedelta(hours=4)
 
         database_keys[invite_code] = {
             "service": self.service_name,
@@ -98,93 +109,8 @@ class GrantMachineModal(discord.ui.Modal, title="👑 Cấp Máy Cho Thành Viê
         }
 
         success_embed = discord.Embed(
-            title=f"✅ Cấp Máy {self.service_name} ({self.hours}h) Thành Công!",
-            description=f"Đã cấp máy cho {matched_member.mention}:",
-            color=discord.Color.green()
-        )
-        success_embed.add_field(name="📧 Email:", value=f"`{email}`", inline=False)
-        success_embed.add_field(name="🔑 Mật khẩu:", value=f"`{password}`", inline=False)
-        success_embed.add_field(name="🎟️ Mã mời hệ thống:", value=f"`{invite_code}`", inline=False)
-        success_embed.add_field(name="⏳ Hạn sử dụng:", value=f"Đến **{expiry_time.strftime('%H:%M - %d/%m/%Y')} ({self.hours}h)**", inline=False)
-        success_embed.set_footer(text="THL CLOUD • Tự động hóa kết nối")
-
-        await msg.edit(content=None, embed=success_embed)
-
-class AdminTimeSelectView(discord.ui.View):
-    def __init__(self, service_name: str):
-        super().__init__(timeout=None)
-        self.service_name = service_name
-
-    @discord.ui.button(label="⏱️ Cấp 4 Giờ", style=discord.ButtonStyle.blurple)
-    async def time_4h(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(GrantMachineModal(self.service_name, 4))
-
-    @discord.ui.button(label="👑 Cấp 24 Giờ", style=discord.ButtonStyle.danger)
-    async def time_24h(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(GrantMachineModal(self.service_name, 24))
-
-class AdminMachineView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-        vs_btn = discord.ui.Button(label="VSPhone", style=discord.ButtonStyle.green, emoji="🪩")
-        async def vs_callback(interaction: discord.Interaction):
-            if not interaction.guild or not interaction.user.guild_permissions.administrator:
-                await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
-                return
-            await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VSPhone**. Chọn mức thời gian cấp:", view=AdminTimeSelectView("VSPHONE"))
-        vs_btn.callback = vs_callback
-        self.add_item(vs_btn)
-
-        vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🌀")
-        async def vmos_callback(interaction: discord.Interaction):
-            if not interaction.guild or not interaction.user.guild_permissions.administrator:
-                await interaction.response.send_message("❌ Bạn không có quyền Quản trị viên!", ephemeral=True)
-                return
-            await interaction.response.edit_message(content="⚙️ Bạn đã chọn **VMOS**. Chọn mức thời gian cấp:", view=AdminTimeSelectView("VMOS"))
-        vmos_btn.callback = vmos_callback
-        self.add_item(vmos_btn)
-
-class UserMachineSelectView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-        vs_btn = discord.ui.Button(label="VSPhone", style=discord.ButtonStyle.green, emoji="🪩")
-        async def vs_callback(interaction: discord.Interaction):
-            await self.process_user_reg(interaction, "VSPHONE")
-        vs_btn.callback = vs_callback
-        self.add_item(vs_btn)
-
-        vmos_btn = discord.ui.Button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🌀")
-        async def vmos_callback(interaction: discord.Interaction):
-            await self.process_user_reg(interaction, "VMOS")
-        vmos_btn.callback = vmos_callback
-        self.add_item(vmos_btn)
-
-    async def process_user_reg(self, interaction: discord.Interaction, service_name: str):
-        await interaction.response.send_message(f"⏳ Đang khởi tạo và mua máy **{service_name}** trên hệ thống...", ephemeral=True)
-        msg = await interaction.original_response()
-
-        # Tự sinh email dạng THLHUB.com theo yêu cầu
-        email = f"{service_name.lower()}_{random.randint(1000, 9999)}@THLHUB.com"
-        password = str(random.randint(100000, 999999))
-        invite_code = f"{service_name.lower()}_" + "".join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=6))
-        
-        api_buy_machine(service_name, email, password)
-
-        expiry_time = datetime.now() + timedelta(hours=4)
-        database_keys[invite_code] = {
-            "service": service_name,
-            "email": email,
-            "password": password,
-            "expires_at": expiry_time,
-            "buff_count": 0,
-            "last_buff_date": ""
-        }
-
-        success_embed = discord.Embed(
-            title="☁️ Tạo Tài Khoản & Mua Máy Thành Công",
-            description=f"Đã đăng ký tài khoản trial cho dịch vụ **{service_name}**:",
+            title="☁️ Mua Máy Thành Công Qua Web Hanami",
+            description=f"Đã liên kết tài khoản vào dịch vụ **{self.service_name}**:",
             color=discord.Color.green()
         )
         success_embed.add_field(name="📧 Email đăng nhập", value=f"`{email}`", inline=False)
@@ -193,6 +119,18 @@ class UserMachineSelectView(discord.ui.View):
         success_embed.set_footer(text="Dùng lệnh /buff kèm mã mời này để gia hạn thời gian!")
 
         await msg.edit(content=None, embed=success_embed)
+
+class UserMachineSelectView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="VSPhone", style=discord.ButtonStyle.green, emoji="🪩")
+    async def vs_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(UserAccountInputModal("VSPHONE"))
+
+    @discord.ui.button(label="VMOS", style=discord.ButtonStyle.blurple, emoji="🌀")
+    async def vmos_callback(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(UserAccountInputModal("VMOS"))
 
 class MainBot(discord.Client):
     def __init__(self):
@@ -205,6 +143,8 @@ class MainBot(discord.Client):
             print("Đã đồng bộ lệnh Discord thành công.")
         except Exception as e:
             print(f"Lỗi đồng bộ lệnh: {e}")
+        
+        self.loop.create_task(keep_session_alive())
 
 client = MainBot()
 
@@ -214,17 +154,10 @@ async def on_ready():
 
 @client.tree.command(name="reg", description="Tạo tài khoản và mua máy trial tự động")
 async def reg(interaction: discord.Interaction):
-    is_admin = False
-    if interaction.guild and interaction.user:
-        try:
-            is_admin = interaction.user.guild_permissions.administrator
-        except:
-            is_admin = False
-
     panel_embed = discord.Embed(
         title="🍮 Reg Panel",
         description=(
-            "Chọn dịch vụ bên dưới để tạo tài khoản nhanh gọn.\n\n"
+            "Chọn dịch vụ bên dưới để nhập tài khoản và mua máy.\n\n"
             "**Dịch vụ hỗ trợ**\n"
             "• 🪩 VSPhone\n"
             "• 🌀 VMOS\n\n"
@@ -232,11 +165,7 @@ async def reg(interaction: discord.Interaction):
         ),
         color=discord.Color.blurple()
     )
-
-    if is_admin:
-        await interaction.response.send_message(embed=panel_embed, view=AdminMachineView(), ephemeral=True)
-    else:
-        await interaction.response.send_message(embed=panel_embed, view=UserMachineSelectView(), ephemeral=True)
+    await interaction.response.send_message(embed=panel_embed, view=UserMachineSelectView(), ephemeral=True)
 
 @client.tree.command(name="buff", description="Buff thêm thời gian cho mã mời")
 @app_commands.describe(code="Nhập mã mời của bạn")
@@ -257,16 +186,15 @@ async def buff(interaction: discord.Interaction, code: str):
 
     data = database_keys[code]
     
-    # Kiểm tra hạn sử dụng trước khi buff
     if datetime.now() > data["expires_at"]:
-        await interaction.response.send_message(f"⚠️ Máy liên kết với mã mời `{code}` (Email: `{data['email']}`) đã **hết hạn sử dụng**, không thể buff thêm thời gian!", ephemeral=True)
+        await interaction.response.send_message(f"⚠️ Máy liên kết với mã mời `{code}` đã **hết hạn sử dụng**, không thể buff thêm thời gian!", ephemeral=True)
         return
 
     service_type = data["service"].upper()
     hours_to_add = 9 if service_type == "VSPHONE" else 3
     max_buff_limit = 5 if is_admin else 1
 
-    await interaction.response.send_message(f"🔄 Đang xác thực mã mời của email `{data['email']}` và tiến hành buff...", ephemeral=True)
+    await interaction.response.send_message(f"🔄 Đang xác thực mã mời và tiến hành buff...", ephemeral=True)
     msg = await interaction.original_response()
 
     if data["last_buff_date"] == today_str and data["buff_count"] >= max_buff_limit:
